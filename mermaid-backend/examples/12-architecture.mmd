@@ -1,0 +1,28 @@
+C4Container
+    title Container diagram for Internet Banking System
+    
+    Person(customer, "Customer", "A customer of the bank, with personal bank accounts.")
+    
+    System_Ext(emailSystem, "E-mail System", "The internal Microsoft Exchange e-mail system.")
+    System_Ext(bankingSystem, "Mainframe Banking System", "Stores all of the core banking information.")
+    
+    Container(webApp, "Web Application", "Java, Spring MVC", "Delivers the static content and the Internet banking single page application.")
+    Container(spa, "Single-Page Application", "JavaScript, Angular", "Provides all the Internet banking functionality to customers via their web browser.")
+    Container(mobileApp, "Mobile App", "C#, Xamarin", "Provides a limited subset of the Internet banking functionality to customers via their mobile device.")
+    
+    Rel(customer, webApp, "Uses", "HTTPS")
+    Rel(customer, spa, "Uses", "HTTPS")
+    Rel(customer, mobileApp, "Uses")
+    
+    Rel(webApp, spa, "Delivers")
+    Rel(spa, api, "Uses", "JSON/HTTPS")
+    Rel(mobileApp, api, "Uses", "JSON/HTTPS")
+    
+    SystemDb_Ext(database, "Database", "SQL Database", "Stores user registration information, hashed authentication credentials, access logs, etc.")
+    Container(api, "API Application", "Java, Spring MVC", "Provides Internet banking functionality via a JSON/HTTPS API.")
+    
+    Rel(api, database, "Uses")
+    Rel(api, emailSystem, "Sends e-mail using")
+    Rel(api, bankingSystem, "Uses", "XML/HTTPS")
+
+

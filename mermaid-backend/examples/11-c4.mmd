@@ -1,0 +1,14 @@
+C4Context
+    title System Context diagram for Internet Banking System
+    
+    Person(customerA, "Banking Customer A", "A customer of the bank, with personal bank accounts.")
+    Person(customerB, "Banking Customer B", "A customer of the bank, with personal bank accounts.")
+    Person(customerC, "Banking Customer C", "A customer of the bank, with personal bank accounts.")
+    
+    System(bankingSystem, "Internet Banking System", "Allows customers to check their accounts.")
+    
+    Rel(customerA, bankingSystem, "Uses")
+    Rel(customerB, bankingSystem, "Uses")
+    Rel(customerC, bankingSystem, "Uses")
+
+

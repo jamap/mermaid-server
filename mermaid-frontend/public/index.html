@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mermaid Live Editor</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header class="top-header">
+        <div class="header-content">
+            <div class="logo-section">
+                <h1>Mermaid Live Editor</h1>
+                <span class="header-badge">Playground</span>
+            </div>
+            <nav class="toolbar">
+                <button class="toolbar-btn" id="btn-share" title="Compartilhar">
+                    <span>📤</span> Share
+                </button>
+                <button class="toolbar-btn" id="btn-download" title="Baixar diagrama">
+                    <span>💾</span> Save diagram
+                </button>
+                <button class="toolbar-btn active" id="btn-code" title="Código">
+                    Code
+                </button>
+                <button class="toolbar-btn" id="btn-config" title="Configurações" disabled>
+                    Config
+                </button>
+                <a href="https://mermaid.js.org/" target="_blank" class="toolbar-btn" title="Documentação">
+                    Docs
+                </a>
+            </nav>
+        </div>
+    </header>
+    
+    <main class="container">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <div class="section-header">
+                    <button class="section-toggle active" data-section="code">
+                        <span class="section-icon">📝</span>
+                        <span>Code</span>
+                    </button>
+                </div>
+                <div class="section-content active" id="section-code">
+                    <div class="editor-wrapper">
+                        <div class="editor-line-numbers" id="line-numbers"></div>
+                        <textarea id="editor" spellcheck="false" placeholder="Digite seu código Mermaid aqui..."></textarea>
+                    </div>
+                    <div class="loading-indicator" id="loading" style="display: none;">
+                        <span class="spinner"></span> Renderizing...
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-section collapsible">
+                <div class="section-header">
+                    <button class="section-toggle active" data-section="samples">
+                        <span class="section-icon">🔧</span>
+                        <span>Sample Diagrams</span>
+                    </button>
+                    <button class="collapse-btn active" data-target="samples" title="Expandir/Recolher">
+                        <span class="collapse-icon">▼</span>
+                    </button>
+                </div>
+                <div class="section-content active" id="section-samples">
+                    <div class="samples-grid">
+                        <button class="sample-btn active" data-sample="flowchart">Flowchart</button>
+                        <button class="sample-btn" data-sample="sequence">Sequence</button>
+                        <button class="sample-btn" data-sample="class">Class</button>
+                        <button class="sample-btn" data-sample="state">State</button>
+                        <button class="sample-btn" data-sample="er">Entity Relationship</button>
+                        <button class="sample-btn" data-sample="gantt">Gantt</button>
+                        <button class="sample-btn" data-sample="pie">Pie</button>
+                        <button class="sample-btn" data-sample="gitgraph">Git Graph</button>
+                        <button class="sample-btn" data-sample="mindmap">Mindmap</button>
+                        <button class="sample-btn" data-sample="journey">Journey</button>
+                        <button class="sample-btn" data-sample="c4">C4</button>
+                        <button class="sample-btn" data-sample="architecture">Architecture</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-section collapsible">
+                <div class="section-header">
+                    <button class="section-toggle active" data-section="actions">
+                        <span class="section-icon">⚡</span>
+                        <span>Actions</span>
+                    </button>
+                    <button class="collapse-btn active" data-target="actions" title="Expandir/Recolher">
+                        <span class="collapse-icon">▼</span>
+                    </button>
+                </div>
+                <div class="section-content active" id="section-actions">
+                    <div class="actions-list">
+                        <button class="action-btn" id="action-clear" title="Limpar editor">
+                            <span class="action-icon">🗑️</span>
+                            <span>Clear</span>
+                        </button>
+                        <button class="action-btn" id="action-format" title="Formatar código">
+                            <span class="action-icon">✨</span>
+                            <span>Format</span>
+                        </button>
+                        <button class="action-btn" id="action-copy-code" title="Copiar código">
+                            <span class="action-icon">📋</span>
+                            <span>Copy Code</span>
+                        </button>
+                        <button class="action-btn" id="action-download-svg" title="Baixar SVG">
+                            <span class="action-icon">📥</span>
+                            <span>Download SVG</span>
+                        </button>
+                        <button class="action-btn" id="action-download-png" title="Baixar PNG">
+                            <span class="action-icon">🖼️</span>
+                            <span>Download PNG</span>
+                        </button>
+                        <button class="action-btn" id="action-download-pdf" title="Baixar PDF">
+                            <span class="action-icon">📄</span>
+                            <span>Download PDF</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </aside>
+        
+        <div class="preview-panel">
+            <div class="panel-header">
+                <div class="tab-buttons">
+                    <button class="tab-btn active" data-tab="preview">Preview</button>
+                </div>
+                <div class="panel-actions">
+                    <button class="icon-btn" id="btn-zoom-out" title="Diminuir zoom">−</button>
+                    <button class="icon-btn" id="btn-zoom-reset" title="Resetar zoom">⌂</button>
+                    <button class="icon-btn" id="btn-zoom-in" title="Aumentar zoom">+</button>
+                    <button class="icon-btn" id="btn-fullscreen" title="Tela cheia">⛶</button>
+                </div>
+            </div>
+            <div id="preview" class="preview-content">
+                <div class="preview-placeholder">
+                    <div class="placeholder-icon">📊</div>
+                    <p>Seu diagrama aparecerá aqui</p>
+                </div>
+            </div>
+        </div>
+    </main>
+    
+    <div class="error-panel" id="error-container" style="display: none;">
+        <div class="error-header">
+            <span class="error-icon">⚠️</span>
+            <h3>Erro de Renderização</h3>
+            <button class="error-close" id="error-close">✕</button>
+        </div>
+        <pre id="error-log"></pre>
+    </div>
+    
+    <script src="client.js"></script>
+</body>
+</html>
+

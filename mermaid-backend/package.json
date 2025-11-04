@@ -1,0 +1,21 @@
+{
+  "name": "mermaid-backend",
+  "version": "1.0.0",
+  "description": "API backend otimizada para renderização Mermaid",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "stop": "node stop.js",
+    "test": "node test-api.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mermaid": "^11.12.1",
+    "puppeteer": "^24.15.0",
+    "sharp": "^0.33.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
