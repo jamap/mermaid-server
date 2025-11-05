@@ -1,7 +1,8 @@
 # Dockerfile único para Backend + Frontend Mermaid
+# Suporta Linux ARM (ARM64) e x86_64
 FROM node:20-slim
 
-# Instalar dependências do sistema necessárias para Puppeteer/Chromium e Sharp
+# Instalar dependências do sistema necessárias para Puppeteer/Chromium, Sharp e ImageMagick
 RUN apt-get update && apt-get install -y \
     # Dependências do Puppeteer/Chromium
     libnss3 \
@@ -29,14 +30,18 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     # Dependências do Sharp (bibliotecas de imagem)
     libvips-dev \
-    # Chrome/Chromium para Puppeteer
+    # ImageMagick completo (para conversão SVG->PNG robusta)
+    imagemagick \
+    # Chrome/Chromium para Puppeteer (suporta ARM e x86_64)
     chromium \
     chromium-driver \
     && rm -rf /var/lib/apt/lists/* \
     # Verificar e criar symlink se necessário
     && (test -f /usr/bin/chromium && echo "✅ Chromium encontrado em /usr/bin/chromium" || \
         (test -f /usr/bin/chromium-browser && ln -s /usr/bin/chromium-browser /usr/bin/chromium && echo "✅ Symlink criado" || \
-         echo "⚠️ Chromium não encontrado"))
+         echo "⚠️ Chromium não encontrado")) \
+    # Verificar ImageMagick
+    && (convert -version && echo "✅ ImageMagick instalado" || echo "⚠️ ImageMagick não encontrado")
 
 # Definir diretório de trabalho
 WORKDIR /app

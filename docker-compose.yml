@@ -3,6 +3,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Nome da imagem gerada será: jamap/mermaid-server:latest
+    image: jamap/mermaid-server:latest
+    # Plataforma: descomente para forçar uma plataforma específica
+    # Para ARM64 (Jetson, Raspberry Pi 4+): descomente a linha abaixo
+    # platform: linux/arm64
+    # Para x86_64: descomente a linha abaixo
+    # platform: linux/amd64
+    # Se não especificar, o Docker detecta automaticamente a plataforma do host
     container_name: mermaid-app
     ports:
       - "8095:8095"  # Frontend
@@ -10,6 +18,9 @@ services:
     environment:
       - NODE_ENV=production
       - BACKEND_URL=http://localhost:8096
+      # Configuração do Chromium para ARM
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:8096/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]

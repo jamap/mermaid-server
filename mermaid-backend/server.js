@@ -3,14 +3,25 @@ const puppeteer = require('puppeteer');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const { promisify } = require('util');
 
-// ⚡ OTIMIZAÇÃO: Sharp para conversão rápida SVG -> PNG
+// ⚡ CONVERSÃO DE IMAGENS: ImageMagick (prioridade) > Sharp > Screenshot
+let imagemagick = null;
 let sharp = null;
+
+try {
+  imagemagick = require('imagemagick');
+  console.log('✅ ImageMagick carregado - conversão SVG->PNG (robusto com SVG malformado)');
+} catch (error) {
+  console.warn('⚠️ ImageMagick não disponível:', error.message);
+  console.warn('   Instale: sudo apt-get install imagemagick');
+}
+
 try {
   sharp = require('sharp');
-  console.log('✅ Sharp carregado - conversão SVG->PNG será muito mais rápida');
+  console.log('✅ Sharp carregado - conversão SVG->PNG será usada como fallback');
 } catch (error) {
-  console.warn('⚠️ Sharp não disponível - usando screenshot do Puppeteer (mais lento)');
+  console.warn('⚠️ Sharp não disponível - usando screenshot do Puppeteer como último recurso');
 }
 
 const app = express();
@@ -103,6 +114,57 @@ function getBaseHTML() {
 let browserInstance = null;
 let browserInitPromise = null;
 
+/**
+ * Encontra o executável do Chromium/Chrome no sistema Linux
+ */
+function findSystemChromium() {
+  const { execSync } = require('child_process');
+  const fs = require('fs');
+  
+  // Lista de caminhos comuns para Chromium/Chrome no Linux
+  const commonPaths = [
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chrome',
+    '/snap/bin/chromium',
+    '/usr/local/bin/chromium',
+    '/usr/local/bin/chromium-browser',
+    // Para sistemas ARM (Jetson, Raspberry Pi)
+    '/usr/bin/chromium-browser',
+    '/opt/google/chrome/chrome'
+  ];
+  
+  // Verificar caminhos comuns
+  for (const path of commonPaths) {
+    if (fs.existsSync(path)) {
+      try {
+        // Verificar se é executável
+        fs.accessSync(path, fs.constants.X_OK);
+        return path;
+      } catch (e) {
+        // Não é executável, continuar procurando
+      }
+    }
+  }
+  
+  // Tentar usar 'which' para encontrar no PATH
+  const whichCommands = ['chromium', 'chromium-browser', 'google-chrome'];
+  for (const cmd of whichCommands) {
+    try {
+      const chromiumPath = execSync(`which ${cmd} 2>/dev/null`, { encoding: 'utf8' }).trim();
+      if (chromiumPath && fs.existsSync(chromiumPath)) {
+        return chromiumPath;
+      }
+    } catch (e) {
+      // Comando não encontrado, continuar
+    }
+  }
+  
+  return null;
+}
+
 async function getBrowser() {
   if (browserInstance && browserInstance.isConnected()) {
     return browserInstance;
@@ -114,64 +176,134 @@ async function getBrowser() {
   
   // Determinar caminho do executável Chromium
   let executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-  if (executablePath) {
-    const fs = require('fs');
-    // Verificar se o caminho existe, caso contrário tentar alternativas
-    if (!fs.existsSync(executablePath)) {
-      const alternatives = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'];
-      for (const alt of alternatives) {
-        if (fs.existsSync(alt)) {
-          executablePath = alt;
-          break;
-        }
-      }
+  
+  // No Linux, tentar encontrar Chromium do sistema primeiro
+  if (process.platform !== 'win32' && !executablePath) {
+    const systemChromium = findSystemChromium();
+    if (systemChromium) {
+      executablePath = systemChromium;
+      console.log(`🔍 Usando Chromium do sistema: ${executablePath}`);
+    } else {
+      console.log('⚠️  Chromium do sistema não encontrado, tentando usar o do Puppeteer...');
     }
   }
   
-  browserInitPromise = puppeteer.launch({
-    headless: true,
-    executablePath: executablePath || undefined, // Usar Chromium do sistema se disponível
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--disable-software-rasterizer',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding',
-      '--disable-features=TranslateUI',
-      '--disable-ipc-flooding-protection',
-      '--disable-extensions',
-      '--disable-default-apps',
-      '--mute-audio',
-      '--no-first-run',
-      '--disable-sync',
-      '--disable-background-networking',
-      // ⚡ OTIMIZAÇÕES ADICIONAIS para acelerar renderização e screenshots
-      '--disable-web-security',
-      '--disable-features=IsolateOrigins,site-per-process',
-      '--disable-accelerated-2d-canvas',
-      '--disable-accelerated-video-decode',
-      '--run-all-compositor-stages-before-draw',
-      '--disable-threaded-animation',
-      '--disable-threaded-scrolling'
-    ],
-    ignoreHTTPSErrors: true,
-    defaultViewport: { width: 1200, height: 800 }, // ✅ Otimizado desde o início
-    timeout: 60000
-  });
+  // Se foi fornecido via env mas não existe, tentar alternativas
+  if (executablePath && !fs.existsSync(executablePath)) {
+    if (process.platform !== 'win32') {
+      const systemChromium = findSystemChromium();
+      if (systemChromium) {
+        executablePath = systemChromium;
+        console.log(`🔍 Caminho fornecido não existe, usando: ${executablePath}`);
+      } else {
+        executablePath = undefined; // Tentar usar o do Puppeteer
+      }
+    } else {
+      // Windows: manter caminho fornecido ou undefined
+      executablePath = undefined;
+    }
+  }
+  
+  // Função auxiliar para tentar iniciar o browser
+  const tryLaunch = async (execPath) => {
+    return puppeteer.launch({
+      headless: true,
+      executablePath: execPath || undefined,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-features=TranslateUI',
+        '--disable-ipc-flooding-protection',
+        '--disable-extensions',
+        '--disable-default-apps',
+        '--mute-audio',
+        '--no-first-run',
+        '--disable-sync',
+        '--disable-background-networking',
+        // ⚡ OTIMIZAÇÕES ADICIONAIS para acelerar renderização e screenshots
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-accelerated-2d-canvas',
+        '--disable-accelerated-video-decode',
+        '--run-all-compositor-stages-before-draw',
+        '--disable-threaded-animation',
+        '--disable-threaded-scrolling'
+        // Nota: --single-process pode ajudar em sistemas ARM, mas pode causar problemas
+        // Se necessário, adicione: '--single-process' como último item do array
+      ],
+      ignoreHTTPSErrors: true,
+      defaultViewport: { width: 1200, height: 800 },
+      timeout: 60000
+    });
+  };
+  
+  browserInitPromise = (async () => {
+    let lastError = null;
+    
+    // Tentativa 1: Usar caminho fornecido/encontrado
+    if (executablePath) {
+      try {
+        const browser = await tryLaunch(executablePath);
+        const testPage = await browser.newPage();
+        await testPage.close();
+        console.log(`✅ Browser inicializado com sucesso: ${executablePath}`);
+        return browser;
+      } catch (error) {
+        console.warn(`⚠️  Falha ao usar ${executablePath}: ${error.message}`);
+        lastError = error;
+      }
+    }
+    
+    // Tentativa 2: Tentar usar Chromium do sistema (se ainda não tentou)
+    if (!executablePath || process.platform !== 'win32') {
+      const systemChromium = findSystemChromium();
+      if (systemChromium && systemChromium !== executablePath) {
+        try {
+          const browser = await tryLaunch(systemChromium);
+          const testPage = await browser.newPage();
+          await testPage.close();
+          console.log(`✅ Browser inicializado com Chromium do sistema: ${systemChromium}`);
+          return browser;
+        } catch (error) {
+          console.warn(`⚠️  Falha ao usar Chromium do sistema: ${error.message}`);
+          lastError = error;
+        }
+      }
+    }
+    
+    // Tentativa 3: Usar o Chrome baixado pelo Puppeteer (pode falhar em ARM)
+    try {
+      console.log('🔄 Tentando usar Chrome do Puppeteer...');
+      const browser = await tryLaunch(undefined);
+      const testPage = await browser.newPage();
+      await testPage.close();
+      console.log('✅ Browser inicializado com Chrome do Puppeteer');
+      return browser;
+    } catch (error) {
+      console.error(`❌ Falha ao usar Chrome do Puppeteer: ${error.message}`);
+      lastError = error;
+      
+      // Se o erro indica problema com o executável, sugerir instalação
+      if (error.message.includes('Syntax error') || error.message.includes('chrome-linux64')) {
+        console.error('\n💡 SOLUÇÃO: O Chrome do Puppeteer está corrompido ou incompatível.');
+        console.error('   Instale o Chromium do sistema:');
+        console.error('   Ubuntu/Debian: sudo apt-get install chromium-browser');
+        console.error('   Ou defina: export PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser');
+      }
+      
+      throw new Error(`Não foi possível inicializar o browser: ${lastError.message}`);
+    }
+  })();
   
   try {
     browserInstance = await browserInitPromise;
     browserInitPromise = null;
-    
-    // Testar se o browser está realmente funcionando
-    const testPage = await browserInstance.newPage();
-    await testPage.close();
-    
-    console.log('✅ Browser Puppeteer inicializado e testado');
-    
     return browserInstance;
   } catch (error) {
     browserInitPromise = null;
@@ -329,6 +461,131 @@ function getContentType(format) {
   return map[format] || 'application/octet-stream';
 }
 
+/**
+ * Limpa e repara SVG malformado (especialmente útil para mindmaps)
+ * Repara tags não fechadas e garante estrutura XML válida
+ */
+function cleanAndRepairSVG(svgString) {
+  if (!svgString || typeof svgString !== 'string') {
+    return svgString;
+  }
+  
+  let cleaned = svgString.trim();
+  
+  // Remover scripts, comentários e estilos
+  cleaned = cleaned.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+  cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
+  cleaned = cleaned.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+  
+  // Extrair o tag de abertura do SVG
+  const svgOpenMatch = cleaned.match(/<svg([^>]*)>/i);
+  if (!svgOpenMatch) {
+    return cleaned; // Não é um SVG válido
+  }
+  
+  let svgAttrs = svgOpenMatch[1];
+  
+  // Remover atributos problemáticos (event handlers)
+  svgAttrs = svgAttrs.replace(/\s*on\w+\s*=\s*["'][^"']*["']/gi, '');
+  
+  // Garantir xmlns
+  if (!svgAttrs.includes('xmlns=')) {
+    svgAttrs += ' xmlns="http://www.w3.org/2000/svg"';
+  }
+  
+  // Extrair conteúdo entre <svg> e </svg>
+  const svgContentMatch = cleaned.match(/<svg[^>]*>([\s\S]*?)<\/svg>/i);
+  let svgContent = '';
+  
+  if (svgContentMatch && svgContentMatch[1]) {
+    svgContent = svgContentMatch[1];
+  } else {
+    // Se não encontrou </svg>, tentar pegar tudo após <svg>
+    const afterSvgMatch = cleaned.match(/<svg[^>]*>([\s\S]*)$/i);
+    if (afterSvgMatch) {
+      svgContent = afterSvgMatch[1];
+    }
+  }
+  
+  // Reparar tags não fechadas usando uma pilha
+  const tagStack = [];
+  const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9]*)[^>]*>/g;
+  let match;
+  const allTags = [];
+  
+  while ((match = tagRegex.exec(svgContent)) !== null) {
+    const isClosing = match[0].startsWith('</');
+    const tagName = match[1].toLowerCase();
+    allTags.push({
+      tag: match[0],
+      name: tagName,
+      isClosing: isClosing,
+      index: match.index
+    });
+  }
+  
+  // Processar tags em ordem e construir conteúdo reparado
+  let repairedContent = svgContent;
+  const openTags = [];
+  
+  // Para tags auto-fechadas ou sem conteúdo, não precisamos fechar
+  const selfClosingTags = ['rect', 'circle', 'ellipse', 'line', 'path', 'polyline', 'polygon', 'text', 'use', 'image'];
+  
+  // Contar tags <g> abertas e fechadas
+  const openGTags = (svgContent.match(/<g[^>]*>/gi) || []).length;
+  const closeGTags = (svgContent.match(/<\/g>/gi) || []).length;
+  
+  // Contar todas as tags que precisam ser fechadas
+  const allOpenTags = (svgContent.match(/<([a-zA-Z][a-zA-Z0-9]*)[^>]*>/gi) || [])
+    .filter(tag => !tag.includes('/>') && !selfClosingTags.includes(tag.match(/<(\w+)/)?.[1]?.toLowerCase()));
+  const allCloseTags = (svgContent.match(/<\/([a-zA-Z][a-zA-Z0-9]*)>/gi) || []).length;
+  
+  // Se há mais tags abertas que fechadas, fechar tags <g> primeiro
+  if (openGTags > closeGTags) {
+    const missingClose = openGTags - closeGTags;
+    // Inserir fechamentos antes do </svg> ou no final
+    if (repairedContent.includes('</svg>')) {
+      repairedContent = repairedContent.replace(/<\/svg>/i, '</g>'.repeat(missingClose) + '</svg>');
+    } else {
+      repairedContent += '</g>'.repeat(missingClose) + '</svg>';
+    }
+  }
+  
+  // Reconstruir SVG completo
+  if (!repairedContent.trim().endsWith('</svg>')) {
+    if (!repairedContent.includes('</svg>')) {
+      repairedContent += '</svg>';
+    }
+  }
+  
+  // Garantir que começa com <svg
+  if (!repairedContent.trim().startsWith('<svg')) {
+    repairedContent = `<svg${svgAttrs}>${repairedContent}`;
+  } else {
+    // Substituir o tag de abertura para garantir atributos corretos
+    repairedContent = repairedContent.replace(/<svg[^>]*>/i, `<svg${svgAttrs}>`);
+  }
+  
+  // Garantir que termina com </svg>
+  if (!repairedContent.trim().endsWith('</svg>')) {
+    repairedContent += '</svg>';
+  }
+  
+  // Remover múltiplos </svg> no final
+  repairedContent = repairedContent.replace(/<\/svg>\s*<\/svg>/gi, '</svg>');
+  
+  return repairedContent.trim();
+}
+
+/**
+ * Detecta se o código Mermaid é um mindmap (que requer mais tempo para renderizar)
+ */
+function isMindmap(code) {
+  if (!code) return false;
+  const normalized = code.toLowerCase().trim();
+  return normalized.startsWith('mindmap') || normalized.includes('mindmap');
+}
+
 // ==================== ENDPOINT PRINCIPAL ====================
 app.post('/api/generate', async (req, res) => {
   const startTime = Date.now();
@@ -384,29 +641,58 @@ app.post('/api/generate', async (req, res) => {
       usePool = true;
       
       // Apenas atualizar o código Mermaid (muito mais rápido!)
-      await page.evaluate((code) => {
+      // Para mindmaps, usar render() diretamente para garantir SVG bem formado
+      const isMindmapDiagram = isMindmap(normalizedCode);
+      
+      await page.evaluate((code, useRender) => {
         const container = document.querySelector('.mermaid');
         container.innerHTML = ''; // Limpar antes
-        
-        // Criar novo elemento para renderização
-        const newDiv = document.createElement('div');
-        newDiv.className = 'mermaid';
-        newDiv.textContent = code;
-        container.appendChild(newDiv);
         
         // Renderizar usando Mermaid que já está pronto
         return new Promise((resolve, reject) => {
           try {
-            // Mermaid 11.x: usar mermaid.run() que é mais direto
-            if (window.mermaid && window.mermaid.run) {
-              window.mermaid.run({ nodes: [newDiv] }).then(() => {
-                // Após renderizar, mover o SVG para o container principal
-                const svg = newDiv.querySelector('svg');
-                if (svg) {
-                  container.innerHTML = '';
-                  container.appendChild(svg);
+            // Para mindmaps, usar render() diretamente (mais confiável)
+            if (useRender && window.mermaid && window.mermaid.render) {
+              const id = 'mermaid-' + Date.now();
+              window.mermaid.render(id, code).then((result) => {
+                // Verificar se o SVG está bem formado
+                if (result && result.svg) {
+                  // Criar um elemento temporário para validar o SVG
+                  const tempDiv = document.createElement('div');
+                  tempDiv.innerHTML = result.svg;
+                  const svg = tempDiv.querySelector('svg');
+                  
+                  if (svg) {
+                    container.innerHTML = result.svg;
+                    resolve();
+                  } else {
+                    reject(new Error('SVG gerado não contém elemento <svg> válido'));
+                  }
+                } else {
+                  reject(new Error('Resultado do render() não contém SVG'));
                 }
-                resolve();
+              }).catch((err) => {
+                reject(err);
+              });
+            } else if (window.mermaid && window.mermaid.run) {
+              // Para outros diagramas, usar run() que é mais rápido
+              const newDiv = document.createElement('div');
+              newDiv.className = 'mermaid';
+              newDiv.textContent = code;
+              container.appendChild(newDiv);
+              
+              window.mermaid.run({ nodes: [newDiv] }).then(() => {
+                // Aguardar um pouco para garantir que renderização está completa
+                setTimeout(() => {
+                  const svg = newDiv.querySelector('svg');
+                  if (svg) {
+                    container.innerHTML = '';
+                    container.appendChild(svg);
+                    resolve();
+                  } else {
+                    reject(new Error('SVG não foi gerado após run()'));
+                  }
+                }, 100);
               }).catch((err) => {
                 reject(err);
               });
@@ -426,7 +712,7 @@ app.post('/api/generate', async (req, res) => {
             reject(err);
           }
         });
-      }, normalizedCode);
+      }, normalizedCode, isMindmapDiagram);
     }
     
     try {
@@ -457,9 +743,41 @@ app.post('/api/generate', async (req, res) => {
         // Isso é MUITO mais rápido e confiável que screenshots do Puppeteer
         
         // Primeiro, obter o SVG (já está renderizado)
-        const svgData = await page.evaluate(() => {
+        const isMindmapDiagram = isMindmap(normalizedCode);
+        const svgData = await page.evaluate((isMindmap) => {
           const svg = document.querySelector('.mermaid svg');
           if (!svg) return null;
+          
+          // Para mindmaps, validar estrutura do SVG antes de extrair
+          let isValid = true;
+          if (isMindmap) {
+            // Verificar se há tags não fechadas
+            const svgHTML = svg.outerHTML;
+            const openGTags = (svgHTML.match(/<g[^>]*>/gi) || []).length;
+            const closeGTags = (svgHTML.match(/<\/g>/gi) || []).length;
+            
+            if (openGTags !== closeGTags) {
+              console.warn(`⚠️ SVG do mindmap tem tags desbalanceadas: ${openGTags} abertas, ${closeGTags} fechadas`);
+              isValid = false;
+            }
+            
+            // Verificar se o SVG tem estrutura válida
+            if (isValid) {
+              try {
+                const parser = new DOMParser();
+                const parsed = parser.parseFromString(svgHTML, 'image/svg+xml');
+                const parseError = parsed.querySelector('parsererror');
+                if (parseError) {
+                  console.warn('⚠️ SVG do mindmap tem erro de parsing:', parseError.textContent);
+                  isValid = false;
+                }
+              } catch (e) {
+                console.warn('⚠️ Não foi possível validar SVG do mindmap:', e.message);
+                // Continuar mesmo assim, mas pode falhar no Sharp
+                isValid = false;
+              }
+            }
+          }
           
           // Obter dimensões do SVG renderizado
           const rect = svg.getBoundingClientRect();
@@ -492,87 +810,166 @@ app.post('/api/generate', async (req, res) => {
           return {
             svg: svgHTML,
             width: Math.ceil(width),
-            height: Math.ceil(height)
+            height: Math.ceil(height),
+            isValid: isValid
           };
-        });
+        }, isMindmapDiagram);
         
-        if (!svgData || !svgData.svg) throw new Error('SVG não encontrado');
-        
-        // Tentar conversão rápida com Sharp primeiro
+        // Se o SVG do mindmap está inválido, pular Sharp e usar screenshot
         let useScreenshot = false;
+        if (!svgData || !svgData.svg) {
+          throw new Error('SVG não encontrado na página');
+        }
         
-        if (sharp) {
-          try {
-            let cleanSvg = svgData.svg;
-            
-            // Remover scripts (não necessários para conversão)
-            cleanSvg = cleanSvg.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
-            
-            // Garantir xmlns
-            if (!cleanSvg.includes('xmlns=')) {
-              cleanSvg = cleanSvg.replace(/<svg/i, `<svg xmlns="http://www.w3.org/2000/svg"`);
+        // Estratégia de conversão: ImageMagick > Sharp > Screenshot
+        // ImageMagick é mais tolerante com SVG malformado
+        if (!useScreenshot && svgData && svgData.svg) {
+          let cleanSvg = svgData.svg;
+          
+          // Preparar SVG: garantir dimensões
+          const minSize = 100;
+          const finalWidth = Math.max(minSize, svgData.width);
+          const finalHeight = Math.max(minSize, svgData.height);
+          
+          // Adicionar width/height se não existirem
+          if (!/width\s*=/i.test(cleanSvg)) {
+            cleanSvg = cleanSvg.replace(/<svg([^>]*)>/i, `<svg$1 width="${finalWidth}">`);
+          }
+          if (!/height\s*=/i.test(cleanSvg)) {
+            cleanSvg = cleanSvg.replace(/<svg([^>]*)>/i, `<svg$1 height="${finalHeight}">`);
+          }
+          
+          // Tentativa 1: ImageMagick (mais robusto com SVG malformado)
+          if (imagemagick) {
+            try {
+              const convert = promisify(imagemagick.convert);
+              
+              // ImageMagick funciona com arquivo temporário ou buffer
+              const tempSvgPath = path.join(__dirname, 'temp-' + Date.now() + '.svg');
+              const tempPngPath = path.join(__dirname, 'temp-' + Date.now() + '.png');
+              
+              try {
+                // Escrever SVG temporário
+                fs.writeFileSync(tempSvgPath, cleanSvg, 'utf8');
+                
+                // Converter com ImageMagick
+                await Promise.race([
+                  convert([tempSvgPath, '-background', 'white', '-density', '300', tempPngPath]),
+                  new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('ImageMagick timeout')), 15000)
+                  )
+                ]);
+                
+                // Ler PNG resultante
+                outputData = fs.readFileSync(tempPngPath);
+                
+                console.log(`⚡ PNG via ImageMagick (${finalWidth}x${finalHeight})`);
+                
+                // Limpar arquivos temporários
+                try { fs.unlinkSync(tempSvgPath); } catch (e) {}
+                try { fs.unlinkSync(tempPngPath); } catch (e) {}
+              } catch (cleanupError) {
+                // Limpar arquivos temporários mesmo em caso de erro
+                try { fs.unlinkSync(tempSvgPath); } catch (e) {}
+                try { fs.unlinkSync(tempPngPath); } catch (e) {}
+                throw cleanupError;
+              }
+            } catch (imError) {
+              console.warn(`⚠️ ImageMagick falhou: ${imError.message}`);
+              // Tentar Sharp como fallback
             }
-            
-            // Apenas garantir dimensões mínimas se não existirem
-            const minSize = 100;
-            const finalWidth = Math.max(minSize, svgData.width);
-            const finalHeight = Math.max(minSize, svgData.height);
-            
-            // Adicionar width/height apenas se não existirem
-            if (!/width\s*=/i.test(cleanSvg)) {
-              cleanSvg = cleanSvg.replace(/<svg([^>]*)>/i, `<svg$1 width="${finalWidth}">`);
+          }
+          
+          // Tentativa 2: Sharp (se ImageMagick não disponível ou falhou)
+          if (!outputData && sharp) {
+            try {
+              let sharpSvg = cleanSvg;
+              
+              // Para Sharp, fazer limpeza adicional se necessário
+              if (isMindmapDiagram) {
+                sharpSvg = cleanAndRepairSVG(sharpSvg);
+              } else {
+                sharpSvg = sharpSvg.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+                if (!sharpSvg.includes('xmlns=')) {
+                  sharpSvg = sharpSvg.replace(/<svg/i, `<svg xmlns="http://www.w3.org/2000/svg"`);
+                }
+              }
+              
+              const svgBuffer = Buffer.from(sharpSvg, 'utf8');
+              const sharpTimeout = isMindmapDiagram ? 10000 : 5000;
+              
+              outputData = await Promise.race([
+                sharp(svgBuffer, { density: 300 })
+                  .png({ quality: 100, compressionLevel: 6 })
+                  .toBuffer(),
+                new Promise((_, reject) => 
+                  setTimeout(() => reject(new Error('Sharp timeout')), sharpTimeout)
+                )
+              ]);
+              
+              console.log(`⚡ PNG via Sharp (${finalWidth}x${finalHeight})`);
+            } catch (sharpError) {
+              console.warn(`⚠️ Sharp falhou: ${sharpError.message}`);
+              useScreenshot = true;
             }
-            if (!/height\s*=/i.test(cleanSvg)) {
-              cleanSvg = cleanSvg.replace(/<svg([^>]*)>/i, `<svg$1 height="${finalHeight}">`);
-            }
-            
-            const svgBuffer = Buffer.from(cleanSvg, 'utf8');
-            
-            // Converter SVG -> PNG com Sharp
-            outputData = await Promise.race([
-              sharp(svgBuffer, { density: 300 })
-                .png({ quality: 100, compressionLevel: 6 })
-                .toBuffer(),
-              new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Sharp timeout')), 5000)
-              )
-            ]);
-            
-            console.log(`⚡ PNG via Sharp (${finalWidth}x${finalHeight})`);
-          } catch (sharpError) {
-            console.warn(`⚠️ Sharp falhou: ${sharpError.message}`);
+          } else if (!outputData && !sharp && !imagemagick) {
+            // Nenhuma biblioteca disponível
             useScreenshot = true;
           }
         } else {
           useScreenshot = true;
         }
         
-        // ⚡ FALLBACK: Se Sharp falhar ou não estiver disponível, usar screenshot
+        // ⚡ FALLBACK FINAL: Se ImageMagick e Sharp falharem ou não estiverem disponíveis, usar screenshot
         if (useScreenshot || !outputData) {
           console.log('📸 Usando screenshot do Puppeteer (fallback)');
           
           // Aguardar SVG estar totalmente renderizado e estável
           // Timeout maior para diagramas complexos como mindmap
+          const isMindmapDiagram = isMindmap(normalizedCode);
+          const screenshotTimeout = isMindmapDiagram ? 15000 : 8000;
+          
           try {
             await page.waitForFunction(() => {
               const svg = document.querySelector('.mermaid svg');
               if (!svg) return false;
               const rect = svg.getBoundingClientRect();
-              // Para mindmap, pode demorar mais para estabilizar
-              return rect.width > 0 && rect.height > 0;
+              // Verificar se está renderizado
+              const hasVisibleContent = svg.querySelector('g, path, circle, rect, text') !== null;
+              return rect.width > 0 && rect.height > 0 && hasVisibleContent;
             }, {
-              timeout: 8000,  // Aumentado para 8s para diagramas complexos
-              polling: 100
+              timeout: screenshotTimeout,
+              polling: isMindmapDiagram ? 150 : 100
             });
             
             // Delay maior para garantir estabilidade (especialmente mindmap)
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, isMindmapDiagram ? 800 : 500));
             
             const svgElement = await page.$('.mermaid svg');
             if (!svgElement) throw new Error('SVG não encontrado para screenshot');
             
             // Tentativa 1: Screenshot direto do elemento com timeout maior
             try {
+              // Para mindmaps, garantir que o elemento está visível e estável
+              if (isMindmapDiagram) {
+                // Aguardar um pouco mais para garantir que animações terminaram
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Verificar se o elemento ainda está presente e visível
+                const isVisible = await page.evaluate(() => {
+                  const svg = document.querySelector('.mermaid svg');
+                  if (!svg) return false;
+                  const rect = svg.getBoundingClientRect();
+                  const style = window.getComputedStyle(svg);
+                  return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+                });
+                
+                if (!isVisible) {
+                  throw new Error('SVG não está visível para screenshot');
+                }
+              }
+              
+              const screenshotTimeoutMs = isMindmapDiagram ? 30000 : 15000;
               outputData = await Promise.race([
                 svgElement.screenshot({ 
                   type: 'png',
@@ -580,7 +977,7 @@ app.post('/api/generate', async (req, res) => {
                   fullPage: false,
                 }),
                 new Promise((_, reject) => 
-                  setTimeout(() => reject(new Error('Screenshot timeout')), 15000)  // 15s para mindmap
+                  setTimeout(() => reject(new Error('Screenshot timeout')), screenshotTimeoutMs)
                 )
               ]);
             } catch (screenshotError1) {

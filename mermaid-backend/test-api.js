@@ -38,11 +38,24 @@ if (!fs.existsSync(OUTPUT_DIR)) {
 }
 
 /**
+ * Detecta se o código é um mindmap
+ */
+function isMindmap(code) {
+    if (!code) return false;
+    const normalized = code.toLowerCase().trim();
+    return normalized.startsWith('mindmap') || normalized.includes('mindmap');
+}
+
+/**
  * Faz uma requisição POST para a API
  */
 function makeRequest(code, format) {
     return new Promise((resolve, reject) => {
         const postData = JSON.stringify({ code, format });
+        
+        // Timeout maior para mindmaps PNG (podem precisar de screenshot)
+        const isMindmapDiagram = isMindmap(code);
+        const timeout = (isMindmapDiagram && format === 'png') ? 35000 : 20000;
         
         const options = {
             hostname: 'localhost',
@@ -53,7 +66,7 @@ function makeRequest(code, format) {
                 'Content-Type': 'application/json',
                 'Content-Length': Buffer.byteLength(postData)
             },
-            timeout: 20000 // 20 segundos (PNGs podem demorar mais que SVGs/PDFs)
+            timeout: timeout
         };
 
         const req = http.request(options, (res) => {
@@ -90,7 +103,7 @@ function makeRequest(code, format) {
 
         req.on('timeout', () => {
             req.destroy();
-            reject(new Error('Request timeout após 20 segundos'));
+            reject(new Error(`Request timeout após ${timeout / 1000} segundos`));
         });
 
         req.write(postData);
